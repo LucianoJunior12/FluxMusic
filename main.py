@@ -1,104 +1,108 @@
-from flask import Flask, request, render_template_string, send_file
-import yt_dlp
+# app.py
+from flask import Flask, render_template_string, request, send_file
 import os
+import yt_dlp
 
 app = Flask(__name__)
 
-HTML = """
+# Pasta para salvar downloads
+DOWNLOAD_FOLDER = "downloads"
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+
+# Template HTML simples
+HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Buscar e Baixar Música</title>
-    <meta charset="utf-8">
+    <title>FluxMusic Downloader</title>
     <style>
-        body { font-family: Arial; padding: 40px; background: #111; color: #fff; }
-        input, button { padding: 12px; font-size: 18px; width: 100%; margin-top: 10px; border-radius: 8px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); grid-gap: 20px; margin-top: 30px; }
-        .card { background: #222; padding: 18px; border-radius: 12px; }
-        img { width: 100%; border-radius: 10px; }
-        .btn { background: #4CAF50; color: #fff; border: none; cursor: pointer; margin-top: 10px; }
+        body { font-family: Arial; padding: 20px; background: #f0f0f0; }
+        .video { display: flex; align-items: center; margin-bottom: 15px; background: #fff; padding: 10px; border-radius: 8px; }
+        img { width: 120px; height: 90px; margin-right: 15px; }
+        .info { flex: 1; }
+        button { padding: 5px 10px; }
     </style>
 </head>
 <body>
-    <h1>Buscar Música</h1>
+    <h1>FluxMusic Downloader</h1>
     <form method="POST" action="/search">
-        <input type="text" name="query" placeholder="Digite nome da música ou artista..." required>
-        <button class="btn" type="submit">Pesquisar</button>
+        <input type="text" name="query" placeholder="Nome da música ou cantor" required>
+        <button type="submit">Pesquisar</button>
     </form>
-
+    <hr>
     {% if results %}
-    <h2>Resultados:</h2>
-    <div class="grid">
-        {% for item in results %}
-        <div class="card">
-            <img src="{{ item.thumbnail }}">
-            <h3>{{ item.title }}</h3>
-            <form method="POST" action="/download">
-                <input type="hidden" name="id" value="{{ item.id }}">
-                <input type="hidden" name="title" value="{{ item.title }}">
-                <button class="btn" type="submit">Baixar MP3</button>
-            </form>
+        {% for video in results %}
+        <div class="video">
+            <img src="{{ video.thumbnail }}" alt="thumbnail">
+            <div class="info">
+                <b>{{ video.title }}</b><br>
+                <form method="POST" action="/download">
+                    <input type="hidden" name="url" value="{{ video.url }}">
+                    <button type="submit">Baixar</button>
+                </form>
+            </div>
         </div>
         {% endfor %}
-    </div>
+    {% elif message %}
+        <p>{{ message }}</p>
     {% endif %}
 </body>
 </html>
 """
 
-def youtube_search(q):
-    """Retorna lista de vídeos do YouTube para uma pesquisa."""
-    opts = {
-        "quiet": True,
-        "extract_flat": True,
-        "skip_download": True,
-        "default_search": "ytsearch10",  # pega até 10 resultados
-    }
-
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        data = ydl.extract_info(q, download=False)
-
+# Função de busca
+def youtube_search(query):
     results = []
-    for item in data["entries"]:
-        results.append(type("Video", (), {
-            "id": item["id"],
-            "title": item["title"],
-            "thumbnail": f"https://i.ytimg.com/vi/{item['id']}/hqdefault.jpg"
-        }))
-
+    try:
+        ydl_opts = {"quiet": True, "skip_download": True}
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            data = ydl.extract_info(f"ytsearch5:{query}", download=False)
+            entries = data.get("entries", [])
+            for item in entries:
+                results.append({
+                    "title": item.get("title"),
+                    "url": item.get("webpage_url"),
+                    "thumbnail": item.get("thumbnail")
+                })
+    except Exception as e:
+        print("Erro na busca:", e)
     return results
 
-@app.route("/")
+# Função de download
+def download_video(url):
+    try:
+        ydl_opts = {
+            "outtmpl": os.path.join(DOWNLOAD_FOLDER, "%(title)s.%(ext)s"),
+            "format": "bestaudio/best",
+            "quiet": True
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+        return filename
+    except Exception as e:
+        print("Erro no download:", e)
+        return None
+
+@app.route("/", methods=["GET"])
 def index():
-    return render_template_string(HTML)
+    return render_template_string(HTML_TEMPLATE)
 
 @app.route("/search", methods=["POST"])
 def search():
-    query = request.form["query"]
+    query = request.form.get("query")
     results = youtube_search(query)
-    return render_template_string(HTML, results=results)
+    if not results:
+        return render_template_string(HTML_TEMPLATE, results=None, message="Nenhum vídeo encontrado.")
+    return render_template_string(HTML_TEMPLATE, results=results)
 
 @app.route("/download", methods=["POST"])
 def download():
-    vid = request.form["id"]
-    title = request.form["title"].replace("/", "-").replace("\\", "-")
-    filename = f"{title}.mp3"
-
-    opts = {
-        "format": "bestaudio/best",
-        "outtmpl": filename,
-        "quiet": True,
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        }],
-    }
-
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=True)
-
-    return send_file(filename, as_attachment=True)
+    url = request.form.get("url")
+    file_path = download_video(url)
+    if not file_path or not os.path.exists(file_path):
+        return "Erro ao baixar o vídeo."
+    return send_file(file_path, as_attachment=True)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=8080, debug=True)
