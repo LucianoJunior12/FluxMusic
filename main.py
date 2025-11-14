@@ -1,146 +1,110 @@
-import os
+from flask import Flask, request, render_template_string, send_file
 import yt_dlp
-from flask import Flask, render_template_string, request, send_file
+import os
+import requests
 
 app = Flask(__name__)
 
-# Criar pasta de downloads
-if not os.path.exists("downloads"):
-    os.mkdir("downloads")
-
-# ---- TEMPLATE HTML COM INTERFACE BONITA ---- #
 HTML = """
 <!DOCTYPE html>
-<html lang="pt-br">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>FluxMusic Downloader</title>
+    <title>Downloader Local</title>
+    <meta charset="utf-8">
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            background:#111;
-            color:white;
-            text-align:center;
-            padding:40px;
-        }
-        input {
-            width:70%;
-            padding:10px;
-            font-size:17px;
-            border-radius:8px;
-            border:none;
-            margin-bottom:20px;
-        }
-        button {
-            padding:12px 20px;
-            font-size:17px;
-            border:none;
-            border-radius:8px;
-            background:#0a84ff;
-            color:white;
-            cursor:pointer;
-        }
-        .video-box {
-            margin-top:30px;
-            padding:20px;
-            background:#222;
-            border-radius:10px;
-            display:inline-block;
-        }
-        img {
-            width:320px;
-            border-radius:10px;
-            margin-bottom:10px;
-        }
+        body { font-family: Arial; padding: 40px; background: #111; color: #fff; }
+        input, button { padding: 10px; font-size: 18px; width: 100%; margin-top: 10px; }
+        .video-card { margin-top: 20px; background: #222; padding: 20px; border-radius: 10px; }
+        img { width: 100%; border-radius: 10px; margin-top: 15px; }
+        .btn { background: #4CAF50; color: #fff; border: none; padding: 10px; margin-top: 20px; cursor: pointer; }
     </style>
 </head>
 <body>
+    <h1>Baixar Música (Local)</h1>
 
-<h1>FluxMusic Downloader</h1>
-<p>Cole o link do YouTube abaixo:</p>
+    <form method="POST" action="/info">
+        <input type="text" name="query" placeholder="Cole o link ou escreva o nome da música" required>
+        <button class="btn" type="submit">Buscar</button>
+    </form>
 
-<form method="POST">
-    <input name="url" placeholder="https://youtu.be/..." required>
-    <br>
-    <button type="submit">Buscar</button>
-</form>
-
-{% if title %}
-<div class="video-box">
-    <img src="{{ thumbnail }}">
-    <h2>{{ title }}</h2>
-    <a href="/download?url={{ url }}">
-        <button>Baixar MP3</button>
-    </a>
-</div>
-{% endif %}
-
+    {% if video %}
+    <div class="video-card">
+        <h2>{{ video['title'] }}</h2>
+        <img src="{{ video['thumbnail'] }}">
+        <form method="POST" action="/download">
+            <input type="hidden" name="id" value="{{ video['id'] }}">
+            <button class="btn" type="submit">Baixar MP3</button>
+        </form>
+    </div>
+    {% endif %}
 </body>
 </html>
 """
 
-# ------------------------ LOGICA ------------------------ #
-
-def get_info(url):
-    """Pega capa e título SEM baixar."""
+def search_youtube(query):
+    """Busca no YouTube quando link está bloqueado."""
     ydl_opts = {
         "quiet": True,
-        "no_warnings": True,
-        "extract_flat": False,
+        "extract_flat": "in_playlist",
+        "skip_download": True,
+        "default_search": "ytsearch1",
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        return info["title"], info["thumbnail"]
+        info = ydl.extract_info(query, download=False)
 
+    item = info['entries'][0]
+    return item['id'], item['title'], f"https://i.ytimg.com/vi/{item['id']}/hqdefault.jpg"
 
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET"])
 def index():
-    title = None
-    thumbnail = None
-    url = None
+    return render_template_string(HTML)
 
-    if request.method == "POST":
-        url = request.form["url"].strip()
+@app.route("/info", methods=["POST"])
+def info():
+    query = request.form["query"].strip()
 
-        try:
-            title, thumbnail = get_info(url)
-        except Exception:
-            title = "Erro ao carregar vídeo."
-            thumbnail = "https://i.imgur.com/HyfXNxw.png"
+    try:
+        # Tentativa direta pelo link
+        ydl = yt_dlp.YoutubeDL({"quiet": True, "skip_download": True})
+        data = ydl.extract_info(query, download=False)
 
-    return render_template_string(HTML, title=title, thumbnail=thumbnail, url=url)
+        video = {
+            "id": data["id"],
+            "title": data["title"],
+            "thumbnail": data.get("thumbnail", "")
+        }
 
+    except Exception as e:
+        if "Sign in to confirm you're not a bot" in str(e):
+            # Procurar pelo nome automaticamente
+            vid, title, thumb = search_youtube(query)
+            video = {"id": vid, "title": title, "thumbnail": thumb}
+        else:
+            return f"<h1>Erro inesperado: {e}</h1>"
 
-@app.route("/download")
+    return render_template_string(HTML, video=video)
+
+@app.route("/download", methods=["POST"])
 def download():
-    url = request.args.get("url")
-
-    if not url:
-        return "URL inválida."
-
-    # Caminho final
-    output_path = "downloads/%(title)s.%(ext)s"
+    vid = request.form["id"]
+    out = f"{vid}.mp3"
 
     ydl_opts = {
         "format": "bestaudio",
-        "outtmpl": output_path,
+        "outtmpl": out,
         "quiet": True,
-        "postprocessors": [
-            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}
-        ]
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }],
     }
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url)
-            filename = ydl.prepare_filename(info).replace(".webm", ".mp3").replace(".m4a", ".mp3")
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.extract_info(f"https://www.youtube.com/watch?v={vid}", download=True)
 
-        return send_file(filename, as_attachment=True)
-
-    except Exception as e:
-        return f"Erro ao baixar: {e}"
-
+    return send_file(out, as_attachment=True)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    app.run(port=8080, host="0.0.0.0")
