@@ -196,5 +196,5 @@ def download():
     return send_file(mp3_path, as_attachment=True, download_name="musica.mp3")
 
 if __name__ == "__main__":
-    # porta 8080 para Koyeb
-    app.run(host="0.0.0.0", port=8080, threaded=True)
+    app.run(host="0.0.0.0", port=8080)
+
