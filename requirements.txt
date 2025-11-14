@@ -1,3 +1,4 @@
 Flask==3.1.2
 yt-dlp==2024.10.07
 requests
+gunicorn==21.2.0
