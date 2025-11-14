@@ -1,26 +1,23 @@
-# Base image
 FROM python:3.12-slim
 
-# Diretório de trabalho
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copiar requirements e instalar dependências
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Instalar ffmpeg e Node.js (necessários para yt-dlp)
-RUN apt-get update && \
-    apt-get install -y ffmpeg nodejs curl && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN adduser --disabled-password --gecos '' appuser && \
+    mkdir -p downloads && \
+    chown -R appuser:appuser /app
+USER appuser
 
-# Copiar todo o restante da aplicação
-COPY . .
+COPY --chown=appuser:appuser . .
 
-# Criar pasta de downloads temporária caso não exista
-RUN mkdir -p downloads
-
-# Expor a porta 8080
 EXPOSE 8080
-
-# Comando para iniciar a aplicação Flask
 CMD ["python", "app.py"]
