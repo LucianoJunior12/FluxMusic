@@ -1,34 +1,82 @@
-from flask import Flask, request, render_template, send_file
-import yt_dlp
 import os
+import subprocess
+import sys
+
+# ---------------------------
+# Instala pacotes se faltar
+# ---------------------------
+def instalar_pacotes():
+    try:
+        import flask
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "flask"])
+    try:
+        import yt_dlp
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp"])
+
+instalar_pacotes()
+
+# ---------------------------
+# Imports reais
+# ---------------------------
+from flask import Flask, render_template_string, request, send_from_directory
+import yt_dlp
+
+# ---------------------------
+# Configurações
+# ---------------------------
+DOWNLOAD_FOLDER = "downloads"
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)  # cria pasta se não existir
 
 app = Flask(__name__)
 
+HTML = """
+<!doctype html>
+<title>FluxMusic Downloader</title>
+<h2>Baixe seu vídeo do YouTube</h2>
+<form method=post>
+  <input type=text name=link placeholder="Cole o link aqui" style="width:300px">
+  <input type=submit value="Baixar">
+</form>
+{% if filename %}
+<p>Download pronto: <a href="/downloads/{{ filename }}">{{ filename }}</a></p>
+{% endif %}
+"""
+
+# ---------------------------
+# Função para baixar vídeo
+# ---------------------------
+def baixar_video(link):
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': f'{DOWNLOAD_FOLDER}/%(title)s.%(ext)s',
+        'noplaylist': True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(link, download=True)
+        filename = ydl.prepare_filename(info)
+        return os.path.basename(filename)
+
+# ---------------------------
+# Rotas Flask
+# ---------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
+    filename = None
     if request.method == "POST":
-        url = request.form.get("url")
-        if not url:
-            return "Por favor, insira um link do YouTube."
+        link = request.form.get("link")
+        if link:
+            filename = baixar_video(link)
+    return render_template_string(HTML, filename=filename)
 
-        # Configuração do yt-dlp
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "outtmpl": "downloads/%(title)s.%(ext)s",
-            "noplaylist": True,
-        }
+@app.route("/downloads/<path:filename>")
+def download_file(filename):
+    return send_from_directory(DOWNLOAD_FOLDER, filename, as_attachment=True)
 
-        os.makedirs("downloads", exist_ok=True)
-
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info_dict = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info_dict)
-            return send_file(filename, as_attachment=True)
-        except Exception as e:
-            return f"Ocorreu um erro: {e}"
-
-    return render_template("index.html")
-
+# ---------------------------
+# Rodar app
+# ---------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    print("Acesse: http://127.0.0.1:5000")
+    app.run(debug=True)
