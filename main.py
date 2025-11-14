@@ -1,33 +1,42 @@
-from flask import Flask, request, send_file, render_template_string
+from flask import Flask, request, render_template_string, send_file
 from pytube import YouTube
+from pydub import AudioSegment
 import os
 
 app = Flask(__name__)
+download_folder = "downloads"
+os.makedirs(download_folder, exist_ok=True)
 
-HTML_PAGE = """
+# HTML simples para receber o link
+HTML = """
 <!doctype html>
-<title>YouTube Downloader</title>
-<h2>Baixe vídeos do YouTube em MP3</h2>
-<form method="POST">
-  <input name="url" placeholder="Cole o link do YouTube aqui" required>
-  <button type="submit">Baixar</button>
+<title>Baixar MP3</title>
+<h2>Coloque o link do YouTube:</h2>
+<form method=post>
+  <input type=text name=link style="width:400px">
+  <input type=submit value=Baixar>
 </form>
-{% if filename %}
-  <p>Download pronto: <a href="{{ filename }}">{{ filename }}</a></p>
+{% if file %}
+  <p>Download pronto: <a href="{{ file }}">{{ file }}</a></p>
 {% endif %}
 """
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    filename = None
+    file_path = None
     if request.method == "POST":
-        url = request.form["url"]
-        yt = YouTube(url)
-        stream = yt.streams.filter(only_audio=True).first()
-        filename = yt.title + ".mp3"
-        stream.download(filename=filename)
-    return render_template_string(HTML_PAGE, filename=filename)
+        url = request.form.get("link")
+        try:
+            yt = YouTube(url)
+            stream = yt.streams.filter(only_audio=True).first()
+            mp4_file = stream.download(output_path=download_folder)
+            mp3_file = mp4_file.replace(".mp4", ".mp3")
+            AudioSegment.from_file(mp4_file).export(mp3_file, format="mp3")
+            os.remove(mp4_file)
+            file_path = mp3_file
+        except Exception as e:
+            return f"Erro: {e}"
+    return render_template_string(HTML, file=file_path)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=8080)
