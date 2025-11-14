@@ -1,105 +1,146 @@
 import os
-import sys
-import subprocess
+import yt_dlp
 from flask import Flask, render_template_string, request, send_file
-from yt_dlp import YoutubeDL
-from PIL import Image
-import requests
-from io import BytesIO
-
-# Instala dependências se faltarem
-try:
-    import yt_dlp
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp"])
-    import yt_dlp
-
-try:
-    from PIL import Image
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "Pillow"])
-    from PIL import Image
 
 app = Flask(__name__)
-DOWNLOAD_FOLDER = "downloads"
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-HTML_PAGE = """
+# Criar pasta de downloads
+if not os.path.exists("downloads"):
+    os.mkdir("downloads")
+
+# ---- TEMPLATE HTML COM INTERFACE BONITA ---- #
+HTML = """
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
-<meta charset="UTF-8">
-<title>FluxMusic Downloader</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <meta charset="UTF-8">
+    <title>FluxMusic Downloader</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background:#111;
+            color:white;
+            text-align:center;
+            padding:40px;
+        }
+        input {
+            width:70%;
+            padding:10px;
+            font-size:17px;
+            border-radius:8px;
+            border:none;
+            margin-bottom:20px;
+        }
+        button {
+            padding:12px 20px;
+            font-size:17px;
+            border:none;
+            border-radius:8px;
+            background:#0a84ff;
+            color:white;
+            cursor:pointer;
+        }
+        .video-box {
+            margin-top:30px;
+            padding:20px;
+            background:#222;
+            border-radius:10px;
+            display:inline-block;
+        }
+        img {
+            width:320px;
+            border-radius:10px;
+            margin-bottom:10px;
+        }
+    </style>
 </head>
-<body class="bg-light">
-<div class="container py-5">
-  <h1 class="mb-4">FluxMusic Downloader</h1>
-  <form method="POST">
-    <input type="text" name="url" class="form-control mb-3" placeholder="Cole o link do YouTube" required>
-    <button type="submit" class="btn btn-primary">Processar</button>
-  </form>
-  {% if video %}
-  <div class="card mt-4" style="width: 18rem;">
-    <img src="{{ video['thumbnail'] }}" class="card-img-top" alt="Thumbnail">
-    <div class="card-body">
-      <h5 class="card-title">{{ video['title'] }}</h5>
-      <a href="/download/{{ video['filename'] }}" class="btn btn-success">Baixar</a>
-    </div>
-  </div>
-  {% endif %}
+<body>
+
+<h1>FluxMusic Downloader</h1>
+<p>Cole o link do YouTube abaixo:</p>
+
+<form method="POST">
+    <input name="url" placeholder="https://youtu.be/..." required>
+    <br>
+    <button type="submit">Buscar</button>
+</form>
+
+{% if title %}
+<div class="video-box">
+    <img src="{{ thumbnail }}">
+    <h2>{{ title }}</h2>
+    <a href="/download?url={{ url }}">
+        <button>Baixar MP3</button>
+    </a>
 </div>
+{% endif %}
+
 </body>
 </html>
 """
 
-@app.route("/", methods=["GET", "POST"])
-def index():
-    video = None
-    if request.method == "POST":
-        url = request.form.get("url")
-        try:
-            info = download_video_info(url)
-            video = info
-        except Exception as e:
-            print("Erro:", e)
-    return render_template_string(HTML_PAGE, video=video)
+# ------------------------ LOGICA ------------------------ #
 
-def download_video_info(url):
+def get_info(url):
+    """Pega capa e título SEM baixar."""
     ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": os.path.join(DOWNLOAD_FOLDER, "%(title)s.%(ext)s"),
         "quiet": True,
         "no_warnings": True,
-        "noplaylist": True,
+        "extract_flat": False,
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        return info["title"], info["thumbnail"]
+
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    title = None
+    thumbnail = None
+    url = None
+
+    if request.method == "POST":
+        url = request.form["url"].strip()
+
+        try:
+            title, thumbnail = get_info(url)
+        except Exception:
+            title = "Erro ao carregar vídeo."
+            thumbnail = "https://i.imgur.com/HyfXNxw.png"
+
+    return render_template_string(HTML, title=title, thumbnail=thumbnail, url=url)
+
+
+@app.route("/download")
+def download():
+    url = request.args.get("url")
+
+    if not url:
+        return "URL inválida."
+
+    # Caminho final
+    output_path = "downloads/%(title)s.%(ext)s"
+
+    ydl_opts = {
+        "format": "bestaudio",
+        "outtmpl": output_path,
+        "quiet": True,
+        "postprocessors": [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}
+        ]
     }
 
     try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-    except Exception:
-        # Tenta apenas áudio se tiver bloqueio
-        ydl_opts["format"] = "bestaudio"
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url)
+            filename = ydl.prepare_filename(info).replace(".webm", ".mp3").replace(".m4a", ".mp3")
 
-    filename = ydl.prepare_filename(info)
-    # Reduz para apenas audio se bloqueado
-    if not os.path.exists(filename):
-        filename = filename.rsplit(".", 1)[0] + ".webm"
+        return send_file(filename, as_attachment=True)
 
-    return {
-        "title": info.get("title", "Sem título"),
-        "thumbnail": info.get("thumbnail", ""),
-        "filename": os.path.basename(filename)
-    }
+    except Exception as e:
+        return f"Erro ao baixar: {e}"
 
-@app.route("/download/<filename>")
-def download(filename):
-    path = os.path.join(DOWNLOAD_FOLDER, filename)
-    if os.path.exists(path):
-        return send_file(path, as_attachment=True)
-    return "Arquivo não encontrado!", 404
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=8080, debug=True)
